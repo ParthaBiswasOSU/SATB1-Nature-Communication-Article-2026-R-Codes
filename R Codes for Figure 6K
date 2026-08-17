@@ -1,0 +1,200 @@
+#A Complete Code for Generating Heatmap
+
+library(DESeq2)
+library(ggplot2)
+
+
+Counts <- read.delim("Count_Table.csv", header = TRUE, row.names = 1, sep = ",")
+head(Counts)
+dim(Counts) 
+
+#If You want to duplicate the common values, You can use it 
+Counts_Data<-read.csv('Count_Table.csv')
+dim(Counts_Data)
+unique(duplicated(Counts_Data[,1]))
+Counts_Data=Counts_Data[!duplicated(Counts_Data[,1]),]
+dim(Counts_Data)
+rownames(Counts_Data)=Counts_Data[,1]
+Counts_Data=Counts_Data[,-1]
+
+head(Counts_Data)
+dim(Counts_Data)
+
+
+
+#Screen the Data 
+Counts <- Counts_Data[which(rowSums(Counts_Data) > 50),]
+
+Counts
+
+dim(Counts)
+
+
+#Make the ColData
+condition <- factor(c("Control","Control","Control","Control", "Treatment","Treatment","Treatment","Treatment"))
+coldata <- data.frame(row.names = colnames(Counts), condition)
+coldata
+
+
+#Make the DeSeq Object 
+dds <- DESeqDataSetFromMatrix(countData = round(Counts), colData = coldata, design = ~condition)
+
+#Make the dds of DESeq
+dds <- DESeq(dds)
+
+#Ceate new variable of vsdata
+vsdata <- vst(dds, blind=FALSE)
+
+
+#Generate PCA Plot 
+plotPCA(vsdata, intgroup = "condition")
+
+
+#Generate Dispersion Plot 
+plotDispEsts(dds)
+
+
+#Generate A Table of the Differentially Expressed Genes 
+res <- results(dds, contrast = c("condition", "Treatment", "Control"))
+res
+
+dim(res)
+
+
+#Filter the Table  
+sigs <- na.omit(res)
+
+sigs <- sigs[sigs$padj < 0.05,]
+
+sigs
+dim(sigs)
+
+
+#Make the dataframe
+df <- as.data.frame(sigs)
+df
+
+#For Saving All the Genes 
+write.csv(df,file = "All_Genes_List_01.csv")
+
+
+
+#Screening the Data 
+df.top <- df[ (df$baseMean > 30) & (abs(df$log2FoldChange) > 1.50),]
+df.top
+dim(df.top)
+
+
+
+#For Adding the symbol name in the exel sheet  
+
+df.top$symbol<-row.names(df.top)
+
+
+df.top<-subset(df.top, select=c('baseMean','log2FoldChange','lfcSE','stat','pvalue','padj','symbol'))
+
+df.top
+
+dim(df.top)
+
+#For Omitting NA Gene Name from the List   
+df.top <- na.omit(df.top)
+
+df.top
+
+dim(df.top)
+
+
+#For Saving the Gene List  
+
+write.csv(df.top,file = "Genes_VolcanoPlot.csv")
+
+write.csv(df.top,file = "Final_Genes_List_01.csv")
+
+
+#After generating df You can follow this for HeatMap
+#Make the Logfold higher and lower order in the same list  
+
+df.top <- df.top[order(df.top$log2FoldChange, decreasing = TRUE),]
+df.top
+dim(df.top)
+
+
+# Normalize and extract the counts for significant DEGs    
+mat <- counts(dds, normalized = T)[rownames(df.top),]
+mat
+
+# Scale the expression values for heatmap
+mat.z <- t(apply(mat, 1, scale))
+mat.z
+
+colnames(mat.z) <- rownames(coldata)
+mat.z
+base_mean <- rowMeans(mat.z)
+base_mean
+
+
+#Take the top 25 and lower 25 genes  
+num_keep <- 18
+rows_keep <- c(seq(1:num_keep), seq((nrow(mat.z)-num_keep), nrow(mat.z)))
+rows_keep
+
+
+
+#Install and load the necessary packages for Heatmap 
+
+
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(circlize)
+
+
+#Getting the log2FC value for each gene we are keeping 
+l2_val <- as.matrix(df.top[rows_keep,]$log2FoldChange)
+l2_val
+colnames(l2_val)<-"logFC"
+l2_val
+
+#Getting mean value for each genes we are keeping  
+mean <- as.matrix(df.top[rows_keep,]$baseMean)
+colnames(mean)<-"AveExpr"
+mean
+
+
+#Maps values between b/w/r for min and max l2 values  
+col_logFC <- colorRamp2(c(min(l2_val),0, max(l2_val)), c("blue", "white", "red"))
+
+#Maps between 0% quantile, and 75% quantile of mean (0, 25, 50, 75, 100)
+col_AveExpr <- colorRamp2(c(quantile(mean)[1], quantile(mean)[4]), c("white", "red"))
+
+
+
+#Main code for generating Heatmap 
+ha <- HeatmapAnnotation(summary = anno_summary(gp = gpar(fill = 2),
+                                               height = unit(2, "cm")))
+
+h1 <- Heatmap(mat.z[rows_keep,], cluster_rows = F,
+              column_labels = colnames(mat.z), name="Z-score",
+              cluster_columns = T)
+
+h2 <- Heatmap(l2_val, row_labels = df.top$symbol[rows_keep],
+              cluster_rows = F, name="logFC", top_annotation = ha, col = col_logFC,
+              cell_fun = function(j, i, x, y, w, h, col) { # add text to each grid
+                grid.text(round(l2_val[i, j],2), x, y)
+              })
+
+h3 <- Heatmap(mean, row_labels = df.top$symbol[rows_keep],
+              cluster_rows = F, name = "AveExpr", col=col_AveExpr,
+              cell_fun = function(j, i, x, y, w, h, col) { # add text to each grid
+                grid.text(round(mean[i, j],2), x, y)
+              })
+
+h<- h1+h2+h3
+
+h
+
+jpeg("./Final_Heatmap_FV_01.jpeg", res = 1400, width = 12000, height = 14000)
+
+print(h)
+dev.off()
+
