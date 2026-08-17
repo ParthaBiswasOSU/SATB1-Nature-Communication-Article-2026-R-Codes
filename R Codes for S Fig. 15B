@@ -1,0 +1,283 @@
+
+
+# A Complete R Codes for HeatMap    
+
+# Install and load necessary packages (if not already installed)
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(pheatmap)
+library(RColorBrewer)
+library(circlize)
+
+library(reshape2)
+
+library(DESeq2)
+library(viridis)
+
+library(grid)
+
+
+# Load libraries
+
+
+
+# Load raw counts from the RDS file
+
+raw_counts <- readRDS("isolated_patient_raw_counts.rds")
+
+# Load metadata from the CSV file
+
+metadata <- read.csv("isolated_patient_metadata.csv", row.names = 1)
+
+# Ensure row names of metadata match column names of raw counts
+
+identical(rownames(metadata), colnames(raw_counts))
+
+# Should return TRUE
+
+# Create Seurat object
+
+seurat_obj <- CreateSeuratObject(counts = raw_counts, meta.data = metadata)
+
+
+# 3. Quality Control (QC) and Filtering
+# Calculate mitochondrial gene percentage (important QC metric)
+
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^MT-")
+
+
+
+
+# Visualize QC metrics (optional, but highly recommended)
+
+VlnPlot(seurat_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+plot1 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "percent.mt")
+
+plot2 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+plot1 + plot2
+
+# Filter cells based on QC metrics.  Adjust thresholds VERY CAREFULLY based on your data.
+
+seurat_obj <- subset(seurat_obj, subset = nFeature_RNA > 200 & nFeature_RNA < 2000 &
+                       percent.mt < 5)
+
+
+# Be careful with these thresholds!
+
+
+
+# 4. Normalization and Variance Stabilization
+# Normalize the data using NormalizeData (log-normalization)
+
+seurat_obj <- NormalizeData(seurat_obj, normalization.method = "LogNormalize", scale.factor = 10000)
+
+
+# Identify highly variable features
+
+seurat_obj <- FindVariableFeatures(seurat_obj, selection.method = "vst",
+                                   nfeatures = 2000)
+
+
+#Adjust nfeatures as needed
+
+# Scale the data (regression is often helpful, but not always necessary)
+
+seurat_obj <- ScaleData(seurat_obj, vars.to.regress = "nCount_RNA")
+
+
+
+# Consider also regressing out percent.mt
+
+# 5. Dimensionality Reduction and Clustering (Not strictly needed for DEGs with known groups, but good practice)
+# Perform PCA
+
+seurat_obj <- RunPCA(seurat_obj, features = VariableFeatures(object = seurat_obj))
+
+
+# Determine the number of PCs (Elbow plot is helpful)
+
+ElbowPlot(seurat_obj)
+
+# Cluster the cells
+
+seurat_obj <- FindNeighbors(seurat_obj, dims = 1:10)
+
+# Adjust dims based on ElbowPlot
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.5) # Adjust resolution
+
+# Visualize the clusters (UMAP or t-SNE)
+
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:10)
+
+DimPlot(seurat_obj, reduction = "umap")
+
+
+# 6. Differential Gene Expression Analysis
+# Identify differentially expressed genes between Responder and Non-responder groups
+# Assuming the 'condition_column' in your metadata contains the Responder/Non-responder information
+
+Idents(seurat_obj) <- seurat_obj$condition_column
+
+diff_genes <- FindMarkers(seurat_obj, ident.1 = "Responder", ident.2 = "Nonresponder",
+                          min.pct = 0.25)
+
+
+# Print the top differentially expressed genes
+
+head(diff_genes)
+dim(diff_genes)
+
+
+write.csv(diff_genes, "Final_DEGS by Seurat.csv")
+
+
+
+# Adjust the p-value cutoff based on your experiment and multiple testing correction
+
+dif_Genes <- read.csv("Final_DEGS by Seurat.csv", row.names = 1)
+
+dif_Genes
+
+sig_genes <- subset(diff_genes, abs(avg_log2FC) > 0.55 & p_val < 0.01)
+
+
+
+write.csv(sig_genes, "Significant_Genes.csv")
+
+Genes <- read.csv("Significant_Genes.csv", row.names = 1)
+
+Genes
+
+dim(Genes)
+
+significant_genes <- subset(Genes, abs(avg_log2FC) > 0.55 & p_val < 0.01)
+
+significant_genes
+
+dim(significant_genes)
+
+write.csv(sig_genes, "Final_Significant_Genes.csv")
+
+significant_genes <- read.csv("Final_Significant_Genes.csv", row.names = 1)
+
+
+
+
+
+## Prepare Data for Heatmap
+
+# Create a matrix with log2FC values for the significant genes
+
+log2fc_matrix <- matrix(0, nrow = nrow(significant_genes), ncol = 2) 
+
+rownames(log2fc_matrix) <- rownames(significant_genes)
+
+colnames(log2fc_matrix) <- c("Nonresponder", "Responder")
+
+#Populate the matrix with Log2FC
+
+log2fc_matrix[, "Responder"] <- significant_genes$avg_log2FC
+
+log2fc_matrix[, "Nonresponder"] <- -significant_genes$avg_log2FC
+
+# Optional: Limit the extreme values for better visualization
+log2fc_matrix[log2fc_matrix > 2] <- 2
+
+log2fc_matrix[log2fc_matrix < -2] <- -2
+
+## Design Heatmap
+
+# Define color palettes
+
+heat_colors <- colorRampPalette(c("navy", "white", "firebrick3")
+
+# Prepare_Annotation
+
+annotation <- data.frame(Condition = c("Nonresponder", "Responder"))
+
+
+rownames(annotation) <- colnames(log2fc_matrix)
+
+ann_colors <- list(Condition = c(Responder = "green", Nonresponder = "brown"))
+
+# Plotting the heatmap
+
+New_01 <- pheatmap(log2fc_matrix,
+         color = heat_colors,
+         cluster_rows = TRUE,
+         show_colnames = TRUE,
+         annotation_col = annotation,
+         annotation_colors = ann_colors,
+         fontsize = 20,
+         fontsize_row = 20,
+         fontsize_col = 20,
+         fontsize_number = 18,
+         main = "NSCLC After Treatment (Responder vs Nonresponder)")
+         
+New_02
+
+
+jpeg("./Final_NSCLC_HeatMap.jpeg", res = 1000, width = 12000, height = 14000)
+
+print(FCHeatmap)
+
+dev.off()
+
+
+
+
+
+#A New Approach 
+
+library(pheatmap)
+library(grid)
+library(gridExtra)
+library(ggplot2)
+
+# Create the heatmap object without immediate plotting
+
+heatmap_plot <- pheatmap(
+  log2fc_matrix,
+  color = heat_colors,
+  cluster_rows = TRUE,
+  show_colnames = TRUE,
+  annotation_col = annotation,
+  annotation_colors = ann_colors,
+  fontsize = 22,
+  fontsize_row = 22,
+  fontsize_col = 22,
+  fontsize_number = 22,
+  main = "",
+  silent = TRUE  # To modify the plot before saving
+)
+
+
+# Define the custom title and combine with heatmap
+
+final_plot <- grid.arrange(
+  heatmap_plot$gtable,
+  top = textGrob(
+    "NSCLC After Treatment (Responder vs Nonresponder)",
+    gp = gpar(fontsize = 28, fontface = "bold")
+  )
+)
+
+
+
+# Save the final plot using ggsave for high-quality output
+
+ggsave(
+  filename = "NSCLC_Heatmap.jpeg",
+  plot = final_plot,
+  width = 11, height = 14,   # Width and height in inches
+  dpi = 1200,                # High resolution (DPI)
+  units = "in",              # Specify units
+  device = "jpeg"            # Save as JPEG format
+)
+
+
+
